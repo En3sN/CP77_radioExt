@@ -1,0 +1,198 @@
+name: Build RadioExt for patch 2.5
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/build-2.5.yml
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Update RED4ext.SDK to the patch 2.5 commit
+        shell: bash
+        run: |
+          cd src/vendors/RED4ext.SDK
+          git fetch origin 0f5eba42a4cf3a1161ad3de0b4ed6f1901ec169e
+          git checkout 0f5eba42a4cf3a1161ad3de0b4ed6f1901ec169e
+          git log -1 --oneline
+
+      - name: Write minimal FMOD headers and import definitions
+        shell: bash
+        run: |
+          mkdir -p src/vendors/fmod/inc src/vendors/fmod/lib/x64
+          cat > src/vendors/fmod/inc/fmod.hpp <<'EOF'
+          // Minimal FMOD Core declarations for RadioExt, matching the exports of the bundled fmod.dll (2.03.08).
+          #pragma once
+
+          #define FMOD_VERSION 0x00020308
+
+          typedef enum FMOD_RESULT { FMOD_OK = 0, FMOD_RESULT_FORCEINT = 65536 } FMOD_RESULT;
+          typedef enum FMOD_OPENSTATE { FMOD_OPENSTATE_READY = 0, FMOD_OPENSTATE_LOADING, FMOD_OPENSTATE_ERROR, FMOD_OPENSTATE_CONNECTING, FMOD_OPENSTATE_BUFFERING, FMOD_OPENSTATE_SEEKING, FMOD_OPENSTATE_PLAYING, FMOD_OPENSTATE_SETPOSITION, FMOD_OPENSTATE_MAX, FMOD_OPENSTATE_FORCEINT = 65536 } FMOD_OPENSTATE;
+          typedef enum FMOD_SPEAKERMODE { FMOD_SPEAKERMODE_DEFAULT = 0, FMOD_SPEAKERMODE_FORCEINT = 65536 } FMOD_SPEAKERMODE;
+
+          typedef unsigned int FMOD_MODE;
+          typedef unsigned int FMOD_INITFLAGS;
+          typedef unsigned int FMOD_TIMEUNIT;
+
+          #define FMOD_INIT_NORMAL                0x00000000
+          #define FMOD_INIT_3D_RIGHTHANDED        0x00000004
+          #define FMOD_DEFAULT                    0x00000000
+          #define FMOD_2D                         0x00000008
+          #define FMOD_3D                         0x00000010
+          #define FMOD_CREATESTREAM               0x00000080
+          #define FMOD_NONBLOCKING                0x00010000
+          #define FMOD_3D_INVERSETAPEREDROLLOFF   0x00800000
+          #define FMOD_TIMEUNIT_MS                0x00000001
+
+          typedef struct FMOD_VECTOR { float x; float y; float z; } FMOD_VECTOR;
+          struct FMOD_CREATESOUNDEXINFO;
+          typedef struct FMOD_SYSTEM FMOD_SYSTEM;
+
+          extern "C" FMOD_RESULT FMOD5_System_Create(FMOD_SYSTEM** system, unsigned int headerversion);
+
+          namespace FMOD
+          {
+          class System;
+          class Sound;
+          class Channel;
+          class ChannelGroup;
+
+          inline FMOD_RESULT System_Create(System** system, unsigned int headerversion = FMOD_VERSION)
+          {
+              return FMOD5_System_Create(reinterpret_cast<FMOD_SYSTEM**>(system), headerversion);
+          }
+
+          class System
+          {
+          private:
+              System();
+              System(const System&);
+
+          public:
+              FMOD_RESULT release();
+              FMOD_RESULT getSoftwareFormat(int* samplerate, FMOD_SPEAKERMODE* speakermode, int* numrawspeakers);
+              FMOD_RESULT init(int maxchannels, FMOD_INITFLAGS flags, void* extradriverdata);
+              FMOD_RESULT close();
+              FMOD_RESULT update();
+              FMOD_RESULT set3DSettings(float dopplerscale, float distancefactor, float rolloffscale);
+              FMOD_RESULT set3DListenerAttributes(int listener, const FMOD_VECTOR* pos, const FMOD_VECTOR* vel, const FMOD_VECTOR* forward, const FMOD_VECTOR* up);
+              FMOD_RESULT createSound(const char* name_or_data, FMOD_MODE mode, FMOD_CREATESOUNDEXINFO* exinfo, Sound** sound);
+              FMOD_RESULT createStream(const char* name_or_data, FMOD_MODE mode, FMOD_CREATESOUNDEXINFO* exinfo, Sound** sound);
+              FMOD_RESULT playSound(Sound* sound, ChannelGroup* channelgroup, bool paused, Channel** channel);
+          };
+
+          class Sound
+          {
+          private:
+              Sound();
+              Sound(const Sound&);
+
+          public:
+              FMOD_RESULT release();
+              FMOD_RESULT set3DMinMaxDistance(float min, float max);
+              FMOD_RESULT getLength(unsigned int* length, FMOD_TIMEUNIT lengthtype);
+              FMOD_RESULT getOpenState(FMOD_OPENSTATE* openstate, unsigned int* percentbuffered, bool* starving, bool* diskbusy);
+              FMOD_RESULT setMode(FMOD_MODE mode);
+          };
+
+          class ChannelControl
+          {
+          private:
+              ChannelControl();
+              ChannelControl(const ChannelControl&);
+
+          public:
+              FMOD_RESULT getSystemObject(System** system);
+              FMOD_RESULT stop();
+              FMOD_RESULT setPaused(bool paused);
+              FMOD_RESULT setVolume(float volume);
+              FMOD_RESULT set3DAttributes(const FMOD_VECTOR* pos, const FMOD_VECTOR* vel);
+              FMOD_RESULT set3DMinMaxDistance(float mindistance, float maxdistance);
+              FMOD_RESULT getDSPClock(unsigned long long* dspclock, unsigned long long* parentclock);
+              FMOD_RESULT addFadePoint(unsigned long long dspclock, float volume);
+          };
+
+          class Channel : public ChannelControl
+          {
+          private:
+              Channel();
+              Channel(const Channel&);
+
+          public:
+              FMOD_RESULT setPosition(unsigned int position, FMOD_TIMEUNIT postype);
+          };
+          } // namespace FMOD
+          EOF
+          cat > src/vendors/fmod/inc/fmod_errors.h <<'EOF'
+          // Minimal replacement for FMOD's fmod_errors.h, used only for log messages.
+          #pragma once
+          #include <cstdio>
+          #include "fmod.hpp"
+
+          static const char* FMOD_ErrorString(FMOD_RESULT errcode)
+          {
+              static thread_local char buffer[48];
+              if (errcode == FMOD_OK)
+                  return "No errors.";
+              std::snprintf(buffer, sizeof(buffer), "FMOD error code %d", static_cast<int>(errcode));
+              return buffer;
+          }
+          EOF
+          cat > src/vendors/fmod/fmod.def <<'EOF'
+          LIBRARY fmod.dll
+          EXPORTS
+          FMOD5_System_Create
+          ?init@System@FMOD@@QEAA?AW4FMOD_RESULT@@HIPEAX@Z
+          ?set3DSettings@System@FMOD@@QEAA?AW4FMOD_RESULT@@MMM@Z
+          ?createSound@System@FMOD@@QEAA?AW4FMOD_RESULT@@PEBDIPEAUFMOD_CREATESOUNDEXINFO@@PEAPEAVSound@2@@Z
+          ?createStream@System@FMOD@@QEAA?AW4FMOD_RESULT@@PEBDIPEAUFMOD_CREATESOUNDEXINFO@@PEAPEAVSound@2@@Z
+          ?playSound@System@FMOD@@QEAA?AW4FMOD_RESULT@@PEAVSound@2@PEAVChannelGroup@2@_NPEAPEAVChannel@2@@Z
+          ?update@System@FMOD@@QEAA?AW4FMOD_RESULT@@XZ
+          ?close@System@FMOD@@QEAA?AW4FMOD_RESULT@@XZ
+          ?release@System@FMOD@@QEAA?AW4FMOD_RESULT@@XZ
+          ?getSoftwareFormat@System@FMOD@@QEAA?AW4FMOD_RESULT@@PEAHPEAW4FMOD_SPEAKERMODE@@0@Z
+          ?set3DListenerAttributes@System@FMOD@@QEAA?AW4FMOD_RESULT@@HPEBUFMOD_VECTOR@@000@Z
+          ?release@Sound@FMOD@@QEAA?AW4FMOD_RESULT@@XZ
+          ?getLength@Sound@FMOD@@QEAA?AW4FMOD_RESULT@@PEAII@Z
+          ?getOpenState@Sound@FMOD@@QEAA?AW4FMOD_RESULT@@PEAW4FMOD_OPENSTATE@@PEAIPEA_N2@Z
+          ?setMode@Sound@FMOD@@QEAA?AW4FMOD_RESULT@@I@Z
+          ?set3DMinMaxDistance@Sound@FMOD@@QEAA?AW4FMOD_RESULT@@MM@Z
+          ?stop@ChannelControl@FMOD@@QEAA?AW4FMOD_RESULT@@XZ
+          ?setPaused@ChannelControl@FMOD@@QEAA?AW4FMOD_RESULT@@_N@Z
+          ?getSystemObject@ChannelControl@FMOD@@QEAA?AW4FMOD_RESULT@@PEAPEAVSystem@2@@Z
+          ?getDSPClock@ChannelControl@FMOD@@QEAA?AW4FMOD_RESULT@@PEA_K0@Z
+          ?addFadePoint@ChannelControl@FMOD@@QEAA?AW4FMOD_RESULT@@_KM@Z
+          ?setVolume@ChannelControl@FMOD@@QEAA?AW4FMOD_RESULT@@M@Z
+          ?setPosition@Channel@FMOD@@QEAA?AW4FMOD_RESULT@@II@Z
+          ?set3DAttributes@ChannelControl@FMOD@@QEAA?AW4FMOD_RESULT@@PEBUFMOD_VECTOR@@0@Z
+          ?set3DMinMaxDistance@ChannelControl@FMOD@@QEAA?AW4FMOD_RESULT@@MM@Z
+          EOF
+          cp red4ext/fmod.dll src/vendors/fmod/lib/x64/fmod.dll
+          sed -i 's#set(RADIOEXT_PLUGIN_DIR .*#set(RADIOEXT_PLUGIN_DIR "${CMAKE_BINARY_DIR}/out")#' src/CMakeLists.txt
+          grep -n "RADIOEXT_PLUGIN_DIR \"" src/CMakeLists.txt
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Create fmod_vc.lib
+        shell: pwsh
+        run: lib /nologo /def:src/vendors/fmod/fmod.def /machine:x64 /out:src/vendors/fmod/lib/x64/fmod_vc.lib
+
+      - name: Configure
+        run: cmake -S src -B build -A x64 -DRADIOEXT_DEPLOY_TO_REPO=OFF
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RadioExt-patch-2.5
+          path: build/out/*.dll
+          if-no-files-found: error
